@@ -178,3 +178,153 @@ The test setup involves initializing two (or more) forked environments to repres
 * Upon successful CCIP message relay, the RebaseTokenPool on zkSync Sepolia will mint an equivalent amount of rebase tokens to the user's address on that chain.
 7. Verification : Verify that the rebase token balance on zkSync Sepolia has increased by the expected amount.
 
+## Type Casting for Interoperability
+- When a contract instance needs to be passed as an interface type : `InterfaceType(address(contractInstance))`
+- When a contract instance needs to be passed as an address type : `address(contractInstance)`
+- When sending ETH via a low level call the target address must be cast to payable i.e `payable(address)`
+
+## Testing 
+forge runs tests written in solidity. Test file reside in `test/` directory and are prefixed with `test`
+
+Forge supports the following types of testing:
+
+1. unit testing
+2. fuzz testing
+3. Invariant Testing
+4. Revert Testing
+5. Access Control Testing
+6. Event Testing
+7. Gas Testing
+8. Fork Testing
+9. Integration Testing
+10. Property based Testing
+
+### UNIT Testing : Testing individual functions in isolation
+
+Sample Contract 
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+contract Counter {
+    uint256 public number;
+
+    function increment() public {
+        number++;
+    }
+
+    function setNumber(uint256 _num) public {
+        number = _num;
+    }
+}
+```
+
+Testfile
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+import {Test} from "forge-std/Test.sol";
+import {Counter} from "../src/Counter.sol";
+
+contract CounterTest is Test {
+    Counter counter;
+
+    function setUp() public {
+        counter = new Counter();
+    }
+
+    function testIncrement() public {
+        counter.increment();
+        assertEq(counter.number(), 1);
+    }
+
+    function testSetNumber() public {
+        counter.setNumber(10);
+        assertEq(counter.number(), 10);
+    }
+}
+```
+
+### FUZZ Testing : Automatic Random Testing (Tests function when it has parameters)
+
+```solidity
+function testFuzzSetNumber(uint256 _num) public{
+    counter.setNumber(_num);
+    assertEq(counter.number(), _num);
+}
+```
+
+- Generates random uint256
+- Runs test multiple times
+- Finds edge cases
+
+> Restricting Fuzz Inputs : `vm.assume()` filters invalid fuzz inputs
+```solidity
+function testFuzzSetNumber(uint256 _num) public{
+    vm.assume(_num < 1e18);
+    counter.setNumber(_num);
+    assertEq(counter.number(), _num);
+}
+```
+
+### INVARIANT Testing : Testing invariants(i.e properties which will always be true for the entire contract)
+
+Starts with `invariant` prefix
+
+```solidity
+function invariant_NumberIsAlwaysPositive() public{
+    assert(counter.number() >= 0);
+}
+```
+
+This test randomly calls `setNumber` and `increment` i.e contract functions and checks the invariant after each call
+
+### REVERT Testing : Testing if the function reverts when expected
+Testing failure cases 
+
+```solidity
+function testRevert_WhenInvalid() public{
+    vm.expectRevert();
+    counter.setNumber(type(uint256).max+1);
+}
+```
+
+This function checks if the `setNumber` function reverts when the input is greater than `type(uint256).max` 
+
+### ACCESS CONTROL Testing : Testing access control
+
+```solidity
+address owner = makeAddr("owner");
+address user = makeAddr("user");
+
+function testOnlyOwnerCanCallFunction() public{
+    vm.prank(user);
+    vm.expectRevert();
+    contract.onlyOwnerFunction();
+}
+```
+
+### EVENT Testing : Verify emitted events
+
+```solidity
+event NumberSet(uint256 newNumber);
+```
+
+- Testfile
+
+```solidity
+function testEventNumberSet() public{
+    vm.expectEmit(true,false,false,true);
+    emit NumberSet(10);
+    counter.setNumber(10);
+}
+```
+
+### GAS Testing : Measures gas usage
+
+```bash
+forge test --gas-report
+```
+
