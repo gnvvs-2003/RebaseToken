@@ -1,0 +1,237 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+import {ERC20} from "lib/openzeppelin-contracts/contracts/token/ERC20/ERC20.sol";
+
+/**
+ * @title RebaseToken
+ * @author gnvvs-2003
+ * @notice This token is a rebase token that is capable of operating and being transferred across multiple chains using chainlink CCIP.
+ * This is a cross chain rebase token that incentivises users to deposit into the vault and gain interest in rewards
+ * The interest rate of the contract can only decrease with time
+ * Each user will have their own interest rate based on the time they joined the contract
+ * The interest rate will be the golbal interest rate
+ * The intrest rate can be altered by the owner based on global intrest rate
+ * Only the owner can change the interest rate
+ * Before any transaction(mint, burn, transfer, bridge, ...) we ensure the user principle balance is upto date by calling _mintAccruedInterest(_user)
+ */
+
+contract RebaseToken is ERC20 {
+    // constants
+
+    uint256 private constant PRECISION_FACTOR = 1e18;
+
+    // private variables
+
+    uint256 private s_intrestRate = 5e10; // 0.05% per second
+    mapping(address => uint256) private s_userInterestRate;
+    mapping(address => uint256) private s_userLastUpdatedTimestamp;
+
+    // constructor
+
+    constructor() ERC20("RebaseToken", "RBT") {}
+
+    // external functions
+
+    /**
+     * @param _newInterestRate The new interest rate to be set by the owner
+     * @notice Only the owner can change the interest rate
+     * @notice The new interest rate can only be less than or equal to the current interest rate
+     * @notice The new interest rate will be the global interest rate for all upcomming users who joins the contract
+     */
+
+    function setInterestRate(uint256 _newInterestRate) external {
+        if (_newInterestRate > s_intrestRate) {
+            revert RebaseToken__InterestRateCanOnlyDecreaseWithTime(s_intrestRate, _newInterestRate);
+        }
+        s_intrestRate = _newInterestRate;
+        emit InterestRateSet(_newInterestRate);
+    }
+
+    /**
+     * @param _to The address to mint the tokens to
+     * @param _amount The amount of tokens to mint to the user i.e _to address
+     * @notice Mints token to a user, typically upon deposit of ETH into the vault
+     * Also mints the interest earned by the user since their last transaction with the contract
+     * The interest earned will be given by the function `_mintAccruedInterest`
+     * The users specific interest will be set to the golbal interest rate ,thus locking the interest rate for the newly minted tokens
+     * The actual principal amount will be minted through `_mint` function from ERC20 contract from openzeppelin
+     */
+
+    function mint(address _to, uint256 _amount) external {
+        _mintAccruedInterest(_to); // mints the user principle balance and the interest gained
+        s_userInterestRate[_to] = s_intrestRate; // sets new interest rate to the user
+        _mint(_to, _amount);
+    }
+    /**
+     * @param _from : User address from which tokens are burned
+     * @param _amount : Amount to be burned
+     * This function burns the given number of  tokens from the user address from his total current account balance
+     * This burn function also account for accured interest challange called "dust"
+     * Dust mitigation strategy
+     * A common convention in DeFi is to use type(uint256).max as an input _amount to signify an intent to interact with the user's entire balance.
+     * This helps solve the "dust" problem: tiny, fractional amounts of tokens (often from interest) that might accrue between the moment a user initiates a transaction (like a full withdrawal) and the time it's actually executed on the blockchain due to network latency or block confirmation times.
+     * If _amount is the max value we update the amount with the current balance of user including any accrued interest by using balanceOf(_from)
+     * Before burning the tokens we ensure the user principle balance is upto date by calling _mintAccruedInterest(_from)
+     * finally we burn the token amount from the user address
+     */
+
+    function burn(address _from, uint256 _amount) external {
+        uint256 currentTotalBalance = balanceOf(_from);
+        if (_amount == type(uint256).max) {
+            _amount = currentTotalBalance;
+        }
+        _mintAccruedInterest(_from);
+        _burn(_from, _amount);
+    }
+    /**
+     * @param _user The user to get the principle balance of
+     * @notice Returns the principle balance of the user
+     */
+
+    function pricipleBalanceOf(address _user) external view returns(uint256){
+        return super.balanceOf(_user);
+    }
+
+    // external getter functions
+
+    /**
+     * @param _user The user to get the interest rate of
+     * @notice Returns the interest rate of the user
+     */
+
+    function getUserInterestRate(address _user) external view returns (uint256) {
+        return s_userInterestRate[_user];
+    }
+    
+    /**
+     * @notice Gets the current global interest rate for the token.
+     * @return The current global interest rate.
+     */
+
+    function getInterestRate() external view returns (uint256) {
+        return s_intrestRate;
+    }
+
+    // public functions
+
+    /**
+     * @param _user The user to get the balance of
+     * @notice Returns the balance of the user
+     * @notice The balance of the user will be the sum of the principal amount and the interest earned by the user
+     * final output will = principleBalance + accumulatedInterest
+     * accumulatedInterest = principleBalance*rateOfInterest*time
+     * => final o/p = principleBalance + principleBalance*rateOfInterest*time
+     * => final o/p = principleBalance*(1 + rateOfInterest*time)
+     * _calculateUserAccumulatedInterestSinceLastUpdate will return the value of (1 + rateOfInterest*time) in 1e18 convention
+     * since in block chain we use 1e18 convention every value we define will be with 18 decimal places
+     */
+
+    function balanceOf(address _user) public view override returns (uint256) {
+        uint256 principleBalance = super.balanceOf(_user); //super used for the parent contract function used
+        uint256 growthFactor = _calculateUserAccumulatedInterestSinceLastUpdate(_user);
+        return principleBalance * growthFactor / PRECISION_FACTOR; // scaling to 18 decimal places
+    }
+
+    /**
+     * @param _receipent The address to transfer the tokens to
+     * @param _amount The amount of tokens to transfer to the receipent
+     * Before the transfer occurs any pending interest for both the sender and the receipent will be minted
+     * If the receipent has 0 token balance they should inherit an interest rate
+     * The chosen logic for this will be : The receipent will inherit the current user specific interest rate i.e s_userInterestRate[msg.sender]
+     * This handles use case of self transfer
+     * If the receipent exits i.e already holds tokens their existing s_userInterestRate will not be alteredby this transfer
+     * This function allows users to transfer their entire balance including accured interest
+     * @return A boolean indicating success/failure of the transaction
+     */
+
+    function transfer(address _receipent, uint256 _amount) public override returns (bool) {
+        _mintAccruedInterest(msg.sender);
+        _mintAccruedInterest(_receipent);
+        if (_amount == type(uint256).max) {
+            _amount = balanceOf(msg.sender); // if user wants to transfer entire balance including interest
+        }
+        if (balanceOf(_receipent) == 0 && _amount > 0) {
+            s_userInterestRate[_receipent] = s_userInterestRate[msg.sender];
+        }
+        return super.transfer(_receipent, _amount);
+    }
+
+    /**
+     * @param _sender The address to transfer the tokens from
+     * @param _receipent The address to transfer the tokens to
+     * @param _amount The amount of tokens to transfer to the receipent
+     * Before the transfer occurs any pending interest for both the sender and the receipent will be minted
+     * If the receipent has 0 token balance they should inherit an interest rate
+     * The chosen logic for this will be : The receipent will inherit the current user specific interest rate i.e s_userInterestRate[_sender]
+     * This handles use case of self transfer
+     * If the receipent exits i.e already holds tokens their existing s_userInterestRate will not be alteredby this transfer
+     * This function allows users to transfer their entire balance including accured interest
+     * @return A boolean indicating success/failure of the transaction
+     */
+
+    function transferFrom(address _sender , address _receipent, uint256 _amount) public override returns (bool){
+        _mintAccruedInterest(_sender);
+        _mintAccruedInterest(_receipent);
+        if (_amount == type(uint256).max) {
+            _amount = balanceOf(_sender); // if user wants to transfer entire balance including interest
+        }
+        if (balanceOf(_receipent) == 0 && _amount > 0) {
+            s_userInterestRate[_receipent] = s_userInterestRate[_sender];
+        }
+        return super.transferFrom(_sender, _receipent, _amount);
+    }
+
+    // internal functions
+
+    /**
+     * @param _user The user to mint the interest to
+     * @notice Mints the interest earned by the user since their last transaction with the contract
+     * Updates the users last updated timestamp
+     * Amount of interest earned by the user = current_dynamic_balance - current_stored_principle_balance
+     * (1)principle balance = super.balanceOf(_user)
+     * (2)current_dynamic_balance = balanceOf(_user)
+     * (3)balanceIncrease = (2) - (1)
+     * (4)mint balance increase to the user
+     */
+
+    function _mintAccruedInterest(address _user) internal {
+        uint256 previousPrincipleBalance = super.balanceOf(_user);
+        uint256 currentBalance = balanceOf(_user);
+        uint256 balanceIncrease = currentBalance - previousPrincipleBalance;
+        s_userLastUpdatedTimestamp[_user] = block.timestamp; // sets the last updated timestamp of the user
+        if (balanceIncrease > 0) {
+            _mint(_user, balanceIncrease);
+        }
+    }
+
+    /**
+     * @param _user The user to calculate the accumulated interest of
+     * @notice Calculates the accumulated interest of the user since their last transaction with the contract
+     * @notice Returns the linear interest factor which is the value of (1 + rateOfInterest*time) in 1e18 convention
+     * time = current_block_timestamp - last_updated_timestamp
+     * rateOfInterest = user's specific interest rate which is set by the owner
+     * linearInterestFactor = 1 + rateOfInterest*time
+     */
+
+    function _calculateUserAccumulatedInterestSinceLastUpdate(address _user)
+        internal
+        view
+        returns (uint256 linearInterestFactor)
+    {
+        uint256 timeElapsed = block.timestamp - s_userLastUpdatedTimestamp[_user];
+        if (timeElapsed == 0 || s_userLastUpdatedTimestamp[_user] == 0) {
+            // if user never updated or never minted tokens
+            return PRECISION_FACTOR; // 1 in 1e18 convention
+        }
+        uint256 userInterestRate = s_userInterestRate[_user] * timeElapsed;
+        linearInterestFactor = PRECISION_FACTOR + userInterestRate;
+        return linearInterestFactor;
+    }
+
+    // events
+    event InterestRateSet(uint256 indexed newInterestRate);
+
+    // errors
+    error RebaseToken__InterestRateCanOnlyDecreaseWithTime(uint256 oldInterestRate, uint256 newInterestRate);
+}
