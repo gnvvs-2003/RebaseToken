@@ -328,3 +328,13 @@ function testEventNumberSet() public{
 forge test --gas-report
 ```
 
+# Bridging : The transfer of assets cross chain 
+Blockchain bridges are protocols designed to connect distinct, otherwise isolated blockchain networks.
+
+Bridges serve as a vital connection between different blockchain ecosystems, enabling the transfer of assets and data across chains. 
+
+## Bridge Mechanisms:
+1. Burn and mint : This mechanism is often used for tokens that can be controlled by the bridge protocol on both chains.
+2. Lock and Unlock : This approach is common when the bridge doesn't have minting control over the token or deals with pre-existing token supplies on the destination chain
+3. Lock and Mint : This mechanism is frequently used when bridging native tokens (like ETH) or tokens that the bridge cannot burn on the source chain, to a destination chain where a representation of that asset is needed.
+4. Burn and Unlock : This is essentially the reverse of the Lock-and-Mint mechanism, used when returning a wrapped asset to its native chain or redeeming it for the original.
