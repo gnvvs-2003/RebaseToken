@@ -20,11 +20,11 @@ contract RebaseTokenPool is TokenPool {
      * @param _token The address of the rebase token managed by this pool
      * localTokenDecimals : The decimals of the token i.e 18
      * @param _allowList The list of addresses allowed to send tokens through this pool
-     * @param _rnmProxy The address of the RMN(Risk Management Network) proxy
+     * @param _rmnProxy The address of the RMN(Risk Management Network) proxy
      * @param _router The address of the CCIP Router contract
      */
-    constructor(IERC20 _token, address[] memory _allowList, address _rnmProxy, address _router)
-        TokenPool(_token, 18, _allowList, _rnmProxy, _router)
+    constructor(IERC20 _token, address[] memory _allowList, address _rmnProxy, address _router)
+        TokenPool(_token, 18, _allowList, _rmnProxy, _router)
     {
         // Constructor logic
     }
