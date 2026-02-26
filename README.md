@@ -338,3 +338,171 @@ Bridges serve as a vital connection between different blockchain ecosystems, ena
 2. Lock and Unlock : This approach is common when the bridge doesn't have minting control over the token or deals with pre-existing token supplies on the destination chain
 3. Lock and Mint : This mechanism is frequently used when bridging native tokens (like ETH) or tokens that the bridge cannot burn on the source chain, to a destination chain where a representation of that asset is needed.
 4. Burn and Unlock : This is essentially the reverse of the Lock-and-Mint mechanism, used when returning a wrapped asset to its native chain or redeeming it for the original.
+
+[Visit CCIP](https://docs.chain.link/ccip)
+
+## CCT : CCIPv1.5
+We are deployign a Burn and Mint Cross chain Token b/n sepolia and arbitrum sepolia
+Instead of bridging tokens, the CCT standard:
+
+🔥 Burns tokens on source chain
+
+📡 Sends a verified CCIP message
+
+🪙 Mints equivalent tokens on destination chain
+### Initial Setup and configuration for cct
+
+1. Clone the repo 
+
+```bash
+git clone https://github.com/Cyfrin/ccip-cct-starter.git
+```
+
+2. Intsall dependencies
+
+```bash
+forge install
+```
+
+3. Configure the `configure.json` file
+Set 
+```json
+withGetCCIPAdmin : false
+```
+
+4. Deploy the `DeployToken.s.sol` script on sepolia and arbitrum sepolia i.e Deploy Token contracts
+
+```bash
+forge script script/DeployToken.s.sol --rpc-url $SEPOLIA_RPC_URL --broadcast --sender <your-address> -vvvv
+```
+
+```bash
+forge script script/DeployToken.s.sol --rpc-url $ARBITRUM_SEPOLIA_RPC_URL --broadcast --sender <your-address> -vvvv
+```
+
+Now deploy `DeployBurnMintTokenPool.s.sol` script on sepolia and arbitrum sepolia i.e Deploy Token Pool contracts this gets mint and burn permisions and will handle cross chain logic
+
+```bash
+forge script script/DeployBurnMintTokenPool.s.sol --rpc-url $SEPOLIA_RPC_URL --broadcast --sender <your-address> -vvvv
+```
+
+```bash
+forge script script/DeployBurnMintTokenPool.s.sol --rpc-url $ARBITRUM_SEPOLIA_RPC_URL --broadcast --sender <your-address> -vvvv
+```
+
+Claiming CCIP admin role (via owner)
+
+Since `withGetCCIPAdmin : false` in `configure.json` we need to claim CCIP admin role manually via owner method
+
+1. Call `registerAdminViaOwner` function on `RegisteryModuleOwnerCustom` contract
+2. This function allows the owner to register an address as administrator for the token in `TokenAdminRegistry` contract
+
+on sepolia
+```bash
+forge script script/ClaimAdmin.s.sol --rpc-url $SEPOLIA_RPC_URL --broadcast --sender <your-address> -vvvv
+```
+
+on arbitrum sepolia
+```bash
+forge script script/ClaimAdmin.s.sol --rpc-url $ARBITRUM_SEPOLIA_RPC_URL --broadcast --sender <your-address> -vvvv
+```
+
+3. Accept CCIP admin role
+The adddress given the role of admin now accepts the role by calling `acceptAdminRole` for the specific token
+
+on sepolia
+```bash
+forge script script/AcceptAdminRole.s.sol --rpc-url $SEPOLIA_RPC_URL --broadcast --sender <your-address> -vvvv
+```
+
+on arbitrum sepolia
+```bash
+forge script script/AcceptAdminRole.s.sol --rpc-url $ARBITRUM_SEPOLIA_RPC_URL --broadcast --sender <your-address> -vvvv
+```
+
+4. Set Pools(link token to pools)
+As the registered admint we now associate the deployed token contract address with the pool address in `TokenAdminRegistry` contract, this is done by calling `setPool` function on `TokenAdminRegistry` contract
+
+on sepolia
+```bash
+forge script script/SetPool.s.sol --rpc-url $SEPOLIA_RPC_URL --broadcast --sender <your-address> -vvvv
+```
+
+on arbitrum sepolia
+```bash
+forge script script/SetPool.s.sol --rpc-url $ARBITRUM_SEPOLIA_RPC_URL --broadcast --sender <your-address> -vvvv
+```
+
+5. Add remote chains to pools
+To enable cross chain transfers b/n our deployed pools we must register each pool with its counter part in the other chain
+
+The `ApplyChainUpdates.s.sol` script acheives this by constructing a `TokenPool.ChainUpdate` struct
+
+This struct contains the information about remote chain including 
+    a. CCIP chain selector
+    b. remote token pool address
+    c. developer defined rate limmits for transfer to that remote chain
+
+This chain is then passed to `applyChainUpdates` function on `TokenPool` contract
+
+on sepolia
+```bash
+forge script script/ApplyChainUpdates.s.sol --rpc-url $SEPOLIA_RPC_URL --broadcast --sender <your-address> -vvvv
+```
+
+on arbitrum sepolia
+```bash
+forge script script/ApplyChainUpdates.s.sol --rpc-url $ARBITRUM_SEPOLIA_RPC_URL --broadcast --sender <your-address> -vvvv
+```
+
+> With these steps completed, your token and its associated pools are fully configured for cross-chain transfers between Sepolia and Arbitrum Sepolia.
+
+## Executing and Verifying the bridge(Cross chain transfer)
+
+1. Mint Tokens (Optional but necessary for testing):
+If your deployer address doesn't yet have tokens on the source chain (Sepolia), mint some. The MintTokens.s.sol script calls the mint function on your deployed token contract.
+
+```bash
+forge script script/MintTokens.s.sol --rpc-url $SEPOLIA_RPC_URL --broadcast --sender <your-address> -vvvv
+```
+
+2. Transfer Tokens Cross-Chain:
+Initiate a cross-chain transfer from Sepolia to Arbitrum Sepolia. The TransferTokens.s.sol script handles this. Internally, it:
+* Constructs a Client.EVM2AnyMessage struct. This struct includes details like the receiver address on the destination chain, the amount of tokens to transfer, the fee token to use (LINK or native), and any extra data for programmable transfers.
+* Approves the CCIP Router contract to spend the required amount of your tokens (and fee tokens, if using LINK).
+* Calls the ccipSend function on the CCIP Router contract on the source chain (Sepolia).
+
+On Sepolia (sending to an address on Arbitrum Sepolia):
+
+```bash
+forge script script/TransferTokens.s.sol --rpc-url $SEPOLIA_RPC_URL --broadcast --sender <your-address> -vvvv
+```
+
+The script will output the source transaction hash.
+
+3. Verify the Transfer:
+* Copy the source transaction hash from your terminal.
+* Navigate to the Chainlink (CCIP Explorer: [https://ccip.chain.link/](https://ccip.chain.link/)).
+* Paste the transaction hash into the search bar.
+* The explorer will display the transaction details: Message ID, Source Transaction Hash, Status (e.g., "Waiting for finality," then "Processing," then "Success"), Source Chain, Destination Chain, From/To addresses, and the token transferred.
+* Refresh the explorer page until the status shows "Success". This confirms that the tokens were burned on Sepolia and subsequently minted on Arbitrum Sepolia to the recipient address.
+
+CCTP : Circles solution for moving USDC cross chain in a secure way : This follows burn and mint model 
+
+## Before transfer of tokens
+1. Source chain balance tokens = b
+2. Destination chain balance tokens = d
+
+## After transfer of tokens (Transfer tokens = x)
+1. Source chain balance tokens = b - x
+2. Destination chain balance tokens = d + x
+
+CCTP currently has 2 methods 
+1. Standard -v1 and v2 : Default method of transfer for USDC
+2. Fast -v2
+
+Standard method of transfer
+
+![STANDARD TRANSFER](image.png)
+
+

@@ -70,9 +70,9 @@ contract RebaseToken is ERC20, Ownable, AccessControl {
      * The actual principal amount will be minted through `_mint` function from ERC20 contract from openzeppelin
      */
 
-    function mint(address _to, uint256 _amount) external onlyRole(MINT_AND_BURN_ROLE) {
+    function mint(address _to, uint256 _amount, uint256 _userInterestRate) external onlyRole(MINT_AND_BURN_ROLE) {
         _mintAccruedInterest(_to); // mints the user principle balance and the interest gained
-        s_userInterestRate[_to] = s_intrestRate; // sets new interest rate to the user
+        s_userInterestRate[_to] = _userInterestRate; // sets new interest rate to the user
         _mint(_to, _amount);
     }
     /**
