@@ -160,12 +160,13 @@ contract RebaseTokenTest is Test {
     }
 
     function testCannotCallMintAndBurn() public {
+        uint256 interestRate = rebaseToken.getInterestRate();
         vm.prank(user);
         vm.expectPartialRevert(IAccessControl.AccessControlUnauthorizedAccount.selector);
-        rebaseToken.mint(user, 1e5, 5e10);
+        rebaseToken.mint(user, 100, interestRate);
         vm.prank(user);
         vm.expectPartialRevert(IAccessControl.AccessControlUnauthorizedAccount.selector);
-        rebaseToken.burn(user, 1e5);
+        rebaseToken.burn(user, 100);
     }
 
     function testGetPrincipalAmount(uint256 amount) public {
@@ -198,4 +199,3 @@ contract RebaseTokenTest is Test {
         rebaseToken.grantMintAndBurnRole(user);
     }
 }
-

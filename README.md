@@ -505,4 +505,111 @@ Standard method of transfer
 
 ![STANDARD TRANSFER](image.png)
 
+## Fork Testing : Running tests against a copy of a live blockchain locally 
+* Foundry forks a live network using an RPC URL and lets you 
+    * Interact with real deployed contracts
+    * Use real token balances
+    * Simulate transactions
+    * Modify state locally
+    * Test integrations safely
+All without touching mainnet
+
+> 🔥 Why Fork Testing is Powerful
+
+Without fork:
+- You mock everything
+- Tests may pass but fail in production
+
+With fork:
+- You test against real contracts
+- You test real storage layouts
+- You test real decimals
+- You test real edge cases
+- Especially useful for:
+    - DeFi
+    - CCIP integrations
+    - Aave
+    - Uniswap
+    - Chainlink feeds
+
+Foundry uses an RPC provider like alchemy or infura and pulls blockchain state at a specific block and runs the tests on that test
+
+1. Add RPC URL in your `.env`
+```
+MAINNET_RPC_URL=YOUR_RPC_URL
+```
+
+and in `foundry.toml`
+```TOML
+[rpc_endpoints]
+mainnet = "${MAINNET_RPC_URL}"
+```
+
+2. Create a fork in test
+
+```solidity
+contract ForkTest is Test{
+    function setUp() public{
+        vm.createSelectFork("mainnet");
+    }
+    function testFork1() public{
+        /// test including mainnet contracts
+    }
+}
+```
+
+Specifically it tells : Fork Ethereum mainnet and use it for this test.
+
+Example:
+Testing using real accounts
+
+```solidity
+function testTransfer() public{
+    address exampleAddr = 0x1234567890123456789012345678901234567890;
+    vm.startPrank(exampleAddr);
+    usdc.transfer(address(this),1e5);
+    vm.stopPrank();
+}
+```
+
+**Even though it’s mainnet:**
+**Changes only exist in your local test**
+**Nothing affects real blockchain**
+
+## Forking a specific block
+
+```solidity
+function setUp() public{
+    vm.createSelectFork("mainnet",18000000);
+}
+```
+
+This will fork mainnet at block number 18000000
+
+## Forking with multiple chains 
+
+```solidity
+uint256 mainnetFork;
+uint256 arbitrumFork;
+
+function setUp() public {
+    mainnetFork = vm.createFork("mainnet");
+    arbitrumFork = vm.createFork("arbitrum");
+
+    vm.selectFork(mainnetFork);
+}
+```
+
+| Unit Test  | Fork Test           |
+| ---------- | ------------------- |
+| Uses mocks | Uses real contracts |
+| Fast       | Slightly slower     |
+| Isolated   | Real world state    |
+| Cheap      | Requires RPC        |
+
+### Important Notes
+1. Needs internet (RPC access)
+2. Tests are slower
+3. Always pin block number
+4. Don’t rely on changing balances
 
