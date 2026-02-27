@@ -20,6 +20,7 @@ import {Vault} from "../src/Vault.sol";
 import {IRebaseToken} from "../src/interfaces/IRebaseToken.sol";
 
 contract CrossChain is Test {
+    uint256 SEND_VALUE = 1e5;
     uint256 sepoliaFork;
     uint256 arbSepoliaFork;
 
@@ -46,15 +47,14 @@ contract CrossChain is Test {
         // deploy and configure on sepolia
 
         vm.selectFork(sepoliaFork);
+        vm.startPrank(owner);
         /// 1. deploy the rebase token
         sepoliaToken = new RebaseToken();
         /// 2. create or deploy the vault for source chain i.e sepolia token
         vault = new Vault(IRebaseToken(address(sepoliaToken))); // vault only needed on the source chain
-        /// 3. prank as owner
-        vm.startPrank(owner);
-        /// 4. get the network details for token pool
+        /// 3. get the network details for token pool
         sepoliaNetworkDetails = ccipLocalSimulatorFork.getNetworkDetails(block.chainid);
-        /// 5. register the admin for sepolia token (via owner)
+        /// 4. register the admin for sepolia token (via owner)
         RegistryModuleOwnerCustom(sepoliaNetworkDetails.registryModuleOwnerCustomAddress)
             .registerAdminViaOwner(address(sepoliaToken));
         /// 6. accept the admin role
@@ -69,15 +69,17 @@ contract CrossChain is Test {
         /// 8. connect the pool and token i.e sepolia token and sepolia token pool
         TokenAdminRegistry(sepoliaNetworkDetails.tokenAdminRegistryAddress)
             .setPool(address(sepoliaToken), address(sepoliaTokenPool));
-        /// 9. grant the mint and burn role to the sepolia token pool
+        /// 8. grant the mint and burn role to the sepolia token pool
         sepoliaToken.grantMintAndBurnRole(address(sepoliaTokenPool));
+        /// 9. Grant the mint and burn role to the vault
+        sepoliaToken.grantMintAndBurnRole(address(vault));
         vm.stopPrank();
 
         // deploy and configure on arbitrum sepolia (ALL THE PROCESS IS SAME EXCEPT THERE IS NO VAULT FOR THE DESTINATION CHAIN)
         vm.selectFork(arbSepoliaFork);
+        vm.startPrank(owner);
         /// 1. deploy the rebase token
         arbSepoliaToken = new RebaseToken();
-        vm.startPrank(owner);
         /// 2. get the network details for token pool
         arbSepoliaNetworkDetails = ccipLocalSimulatorFork.getNetworkDetails(block.chainid);
         /// 3. register the admin for arbitrum sepolia token (via owner)
@@ -176,7 +178,7 @@ contract CrossChain is Test {
             data: "",
             tokenAmounts: tokenAmounts,
             feeToken: localNetworkDetails.linkAddress,
-            extraArgs: Client._argsToBytes(Client.EVMExtraArgsV1({gasLimit: 0})) // Using default gas limit not 0 gas
+            extraArgs: Client._argsToBytes(Client.EVMExtraArgsV2({gasLimit: 500_000, allowOutOfOrderExecution: false})) // Using default gas limit not 0 gas
         });
         /// 4. Fee for cross chain operations
         uint256 fee =
@@ -200,19 +202,56 @@ contract CrossChain is Test {
         assertEq(localBalanceBefore - localBalanceAfter, amountToBridge);
         /// 12. Interest rate of user in local chain
         uint256 localUserInterestRate = localToken.getUserInterestRate(user);
+
         vm.selectFork(remoteFork);
-        /// 13. Simulate some time to pass and transfer
-        vm.warp(block.timestamp + 20 minutes);
-        /// 14. User balance on the remote chain
+        /// 13. User balance on the remote chain before receiving
         uint256 remoteBalanceBefore = remoteToken.balanceOf(user);
-        /// 15. Process the message to remote chain
+
+        vm.selectFork(localFork);
+        /// 14. Process the message to remote chain (MUST BE DONE ON SOURCE CHAIN)
         ccipLocalSimulatorFork.switchChainAndRouteMessage(remoteFork);
+
+        vm.selectFork(remoteFork);
+        /// 15. Simulate some time to pass and transfer
+        vm.warp(block.timestamp + 20 minutes);
         /// 16. User balance after receiving on the remote chain
         uint256 remoteBalanceAfter = remoteToken.balanceOf(user);
-        /// 17. Assert that the user balance has increased by the amount to bridge
-        assertEq(remoteBalanceAfter - remoteBalanceBefore, amountToBridge);
+        /// 17. Assert that the user balance has increased by the amount to bridge (approximate due to interest)
+        assertApproxEqAbs(remoteBalanceAfter - remoteBalanceBefore, amountToBridge, 10);
         /// 18. Check the interest rates (Specific to rebase token logic) in remote chain
         uint256 remoteUserInterestRate = remoteToken.getUserInterestRate(user);
         assertEq(remoteUserInterestRate, localUserInterestRate);
+    }
+
+    // testing
+    function testBridgeAllTokens() public {
+        vm.selectFork(sepoliaFork);
+        vm.deal(user, SEND_VALUE);
+        vm.prank(user);
+        Vault(payable(address(vault))).deposit{value: SEND_VALUE}();
+        assertEq(sepoliaToken.balanceOf(user), SEND_VALUE);
+        /// bridging
+        bridgeTokens(
+            SEND_VALUE,
+            sepoliaFork,
+            arbSepoliaFork,
+            sepoliaNetworkDetails,
+            arbSepoliaNetworkDetails,
+            sepoliaToken,
+            arbSepoliaToken
+        );
+        vm.selectFork(arbSepoliaFork);
+        vm.warp(block.timestamp + 20 minutes);
+        bridgeTokens(
+            arbSepoliaToken.balanceOf(user),
+            arbSepoliaFork,
+            sepoliaFork,
+            arbSepoliaNetworkDetails,
+            sepoliaNetworkDetails,
+            arbSepoliaToken,
+            sepoliaToken
+        );
+        vm.selectFork(sepoliaFork);
+        assertApproxEqAbs(sepoliaToken.balanceOf(user), SEND_VALUE, 50);
     }
 }
