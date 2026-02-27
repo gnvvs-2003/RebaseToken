@@ -10,6 +10,9 @@ import {
 import {TokenAdminRegistry} from "lib/ccip/contracts/src/v0.8/ccip/tokenAdminRegistry/TokenAdminRegistry.sol";
 import {TokenPool} from "lib/ccip/contracts/src/v0.8/ccip/pools/TokenPool.sol";
 import {RateLimiter} from "lib/ccip/contracts/src/v0.8/ccip/libraries/RateLimiter.sol";
+import {Client} from "lib/ccip/contracts/src/v0.8/ccip/libraries/Client.sol";
+import {IRouterClient} from "lib/ccip/contracts/src/v0.8/ccip/interfaces/IRouterClient.sol";
+// import {IERC20} from "lib/openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
 
 import {RebaseToken} from "../src/RebaseToken.sol";
 import {RebaseTokenPool} from "../src/RebaseTokenPool.sol";
@@ -32,6 +35,7 @@ contract CrossChain is Test {
     Register.NetworkDetails arbSepoliaNetworkDetails;
 
     address owner = makeAddr("owner");
+    address user = makeAddr("user");
 
     function setUp() public {
         sepoliaFork = vm.createSelectFork("sepolia-eth");
@@ -150,5 +154,65 @@ contract CrossChain is Test {
         vm.prank(owner); // The 'owner' variable should be the deployer/owner of the localPoolAddress
         /// 7. Calling the applyChainUpdates function to update the chain details
         TokenPool(localPoolAddress).applyChainUpdates(remoteChainSelectorsToRemove, chainsToAdd);
+    }
+
+    function bridgeTokens(
+        uint256 amountToBridge,
+        uint256 localFork,
+        uint256 remoteFork,
+        Register.NetworkDetails memory localNetworkDetails,
+        Register.NetworkDetails memory remoteNetworkDetails,
+        RebaseToken localToken,
+        RebaseToken remoteToken
+    ) public {
+        vm.selectFork(localFork);
+        /// 1. initialize tokens amounts
+        Client.EVMTokenAmount[] memory tokenAmounts = new Client.EVMTokenAmount[](1);
+        /// 2. Add local token
+        tokenAmounts[0] = Client.EVMTokenAmount({token: address(localToken), amount: amountToBridge});
+        /// 3. Construct the message (CCIP message)
+        Client.EVM2AnyMessage memory message = Client.EVM2AnyMessage({
+            receiver: abi.encode(user), // receiver on destination chain
+            data: "",
+            tokenAmounts: tokenAmounts,
+            feeToken: localNetworkDetails.linkAddress,
+            extraArgs: Client._argsToBytes(Client.EVMExtraArgsV1({gasLimit: 0})) // Using default gas limit not 0 gas
+        });
+        /// 4. Fee for cross chain operations
+        uint256 fee =
+            IRouterClient(localNetworkDetails.routerAddress).getFee(remoteNetworkDetails.chainSelector, message);
+        /// 5. Funding the fee for user
+        ccipLocalSimulatorFork.requestLinkFromFaucet(user, fee);
+        /// 6. Approving link for router to spend fee to be done by user
+        vm.prank(user);
+        IERC20(localNetworkDetails.linkAddress).approve(localNetworkDetails.routerAddress, fee);
+        /// 7. Approve the bridged token to be done by user
+        vm.prank(user);
+        IERC20(address(localToken)).approve(localNetworkDetails.routerAddress, amountToBridge);
+        /// 8. User balance before sending in the local chain
+        uint256 localBalanceBefore = localToken.balanceOf(user);
+        /// 9. Send the CCIP message
+        vm.prank(user);
+        IRouterClient(localNetworkDetails.routerAddress).ccipSend(remoteNetworkDetails.chainSelector, message);
+        /// 10. User balance after sending in the local chain
+        uint256 localBalanceAfter = localToken.balanceOf(user);
+        /// 11. Assert that the user balance has decreased by the amount to bridge
+        assertEq(localBalanceBefore - localBalanceAfter, amountToBridge);
+        /// 12. Interest rate of user in local chain
+        uint256 localUserInterestRate = localToken.getUserInterestRate(user);
+        vm.selectFork(remoteFork);
+        /// 13. Simulate some time to pass and transfer
+        vm.warp(block.timestamp + 20 minutes);
+        /// 14. User balance on the remote chain
+        uint256 remoteBalanceBefore = remoteToken.balanceOf(user);
+        /// 15. Process the message to remote chain
+        ccipLocalSimulatorFork.switchChainAndRouteMessage(remoteFork);
+        /// 16. User balance after receiving on the remote chain
+        uint256 remoteBalanceAfter = remoteToken.balanceOf(user);
+        /// 17. Assert that the user balance has increased by the amount to bridge
+        assertEq(remoteBalanceAfter - remoteBalanceBefore, amountToBridge);
+        /// 18. Check the interest rates (Specific to rebase token logic) in remote chain
+        uint256 remoteUserInterestRate = remoteToken.getUserInterestRate(user);
+        assertEq(remoteUserInterestRate, localUserInterestRate);
     }
 }
